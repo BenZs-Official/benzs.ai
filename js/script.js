@@ -849,6 +849,78 @@ function isCarouselVideo(video) {
     return video instanceof HTMLVideoElement && Boolean(video.closest('.carousel-item'));
 }
 
+// Keep the mixed order while fitting complete video frames into balanced, full rows.
+function initGalleryLayout() {
+    const grid = document.querySelector('.gallery-grid');
+    if (!grid) return;
+
+    const items = Array.from(grid.querySelectorAll('.gallery-item'));
+    let previousWidth = 0;
+    let frame = 0;
+
+    const arrangeRows = () => {
+        const width = grid.clientWidth;
+        if (!width) return;
+        previousWidth = width;
+        const gap = parseFloat(getComputedStyle(grid).getPropertyValue('--gallery-gap')) || 0;
+        const targetHeight = Math.min(340, width * 0.65);
+        const ratios = items.map((item) => Number(item.style.getPropertyValue('--video-ratio')));
+        const costs = new Array(items.length + 1).fill(Infinity);
+        const rowEnds = new Array(items.length);
+        costs[items.length] = 0;
+
+        // Consider every row break, including the last row, to avoid oversized leftovers.
+        for (let start = items.length - 1; start >= 0; start--) {
+            let ratioSum = 0;
+            for (let end = start; end < items.length; end++) {
+                ratioSum += ratios[end];
+                const availableWidth = width - gap * (end - start);
+                if (availableWidth <= 0) break;
+                const height = availableWidth / ratioSum;
+                const cost = Math.pow((height - targetHeight) / targetHeight, 2) + costs[end + 1];
+                if (cost < costs[start]) {
+                    costs[start] = cost;
+                    rowEnds[start] = end + 1;
+                }
+            }
+        }
+
+        const rows = document.createDocumentFragment();
+        for (let start = 0; start < items.length; start = rowEnds[start]) {
+            const row = document.createElement('div');
+            row.className = 'gallery-row';
+            row.append(...items.slice(start, rowEnds[start]));
+            rows.append(row);
+        }
+        grid.replaceChildren(rows);
+        grid.classList.add('has-gallery-rows');
+    };
+
+    const scheduleLayout = () => {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(arrangeRows);
+    };
+
+    items.forEach((item) => {
+        const video = item.querySelector('video');
+        const syncRatio = () => {
+            const width = video.videoWidth || Number(video.getAttribute('width'));
+            const height = video.videoHeight || Number(video.getAttribute('height'));
+            item.style.setProperty('--video-ratio', width / height);
+        };
+        syncRatio();
+        video.addEventListener('loadedmetadata', () => {
+            syncRatio();
+            scheduleLayout();
+        });
+    });
+
+    arrangeRows();
+    new ResizeObserver(() => {
+        if (grid.clientWidth !== previousWidth) scheduleLayout();
+    }).observe(grid);
+}
+
 function isGalleryVideo(video) {
     return video instanceof HTMLVideoElement && Boolean(video.closest('.gallery-media'));
 }
@@ -2310,6 +2382,7 @@ document.addEventListener('DOMContentLoaded', () => {
         video.addEventListener('click', () => openVideoOverlay(video));
     });
 
+    initGalleryLayout();
     initViewportLazyAutoplayVideos();
 
     volumeSliderElement?.addEventListener('input', (event) => {
